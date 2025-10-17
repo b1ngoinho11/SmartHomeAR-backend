@@ -247,3 +247,5 @@ pg_hba.conf
 .env
 .env.local
 .env.production
+
+database/
