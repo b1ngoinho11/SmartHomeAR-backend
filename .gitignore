@@ -247,5 +247,10 @@ pg_hba.conf
 .env
 .env.local
 .env.production
-
-database/
+ 
+# ZODB (Zope Object Database) files
+data/
+*.fs
+*.fs.index
+*.fs.lock
+*.fs.tmp

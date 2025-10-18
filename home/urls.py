@@ -1,24 +1,31 @@
 from django.urls import path
-from .views import *
+from . import views
+
 
 urlpatterns = [
-    path("home/", HomeCreate.as_view()),
-    path("home/<str:home_id>/", HomeDetail.as_view()),
+    # Homes
+    path('homes/', views.HomeListCreateView.as_view(), name='home-list-create'),
+    path('homes/<uuid:home_id>/', views.HomeDetailView.as_view(), name='home-detail'),
 
-    path("home/<str:home_id>/floors/", FloorCreate.as_view()),
-    path("floors/<str:floor_id>/rooms/", FloorRooms.as_view()),
+    # Floors
+    path('homes/<uuid:home_id>/floors/', views.FloorListCreateView.as_view(), name='floor-list-create'),
+    path('homes/<uuid:home_id>/floors/<uuid:floor_id>/', views.FloorDetailView.as_view(), name='floor-detail'),
 
-    path("floors/<str:floor_id>/rooms/create/", RoomCreate.as_view()),
-    path("rooms/<str:room_id>/devices/", RoomDevices.as_view()),
+    # Rooms
+    path('homes/<uuid:home_id>/floors/<uuid:floor_id>/rooms/', views.RoomListCreateView.as_view(), name='room-list-create'),
+    path('homes/<uuid:home_id>/floors/<uuid:floor_id>/rooms/<uuid:room_id>/', views.RoomDetailView.as_view(), name='room-detail'),
 
-    path("rooms/<str:room_id>/devices/create/", DeviceCreate.as_view()),
-    path("devices/<str:device_id>/", DeviceDetail.as_view()),
-    path("devices/<str:device_id>/toggle_power/", DeviceTogglePower.as_view()),
-    path("devices/<str:device_id>/position/", DeviceGetPosition.as_view()),
-    path("devices/<str:device_id>/position/set/", DeviceSetPosition.as_view()),
+    # Devices
+    path('homes/<uuid:home_id>/floors/<uuid:floor_id>/rooms/<uuid:room_id>/devices/', views.DeviceListCreateView.as_view(), name='device-list-create'),
+    path('homes/<uuid:home_id>/floors/<uuid:floor_id>/rooms/<uuid:room_id>/devices/<uuid:device_id>/', views.DeviceDetailView.as_view(), name='device-detail'),
 
-    path("devices/<str:device_id>/lightbulb/", LightbulbPatch.as_view()),
-    path("devices/<str:device_id>/television/", TelevisionPatch.as_view()),
-    path("devices/<str:device_id>/fan/", FanPatch.as_view()),
-    path("devices/<str:device_id>/aircon/", AirConPatch.as_view()),
+    # Device actions
+    path('devices/<uuid:device_id>/toggle/', views.DeviceTogglePowerView.as_view(), name='device-toggle'),
+    path('devices/<uuid:device_id>/position/', views.DevicePositionView.as_view(), name='device-position'),
+
+    # Device-type specific set/get
+    path('devices/<uuid:device_id>/lightbulb/', views.LightbulbControlView.as_view(), name='lightbulb-control'),
+    path('devices/<uuid:device_id>/television/', views.TelevisionControlView.as_view(), name='television-control'),
+    path('devices/<uuid:device_id>/fan/', views.FanControlView.as_view(), name='fan-control'),
+    path('devices/<uuid:device_id>/air-conditioner/', views.AirConditionerControlView.as_view(), name='ac-control'),
 ]

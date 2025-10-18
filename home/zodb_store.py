@@ -1,38 +1,52 @@
 import os
-import uuid
+from contextlib import contextmanager
+from pathlib import Path
+
+from BTrees.OOBTree import OOBTree
+from ZODB import DB
+from ZODB.FileStorage import FileStorage
 import transaction
-from ZODB import FileStorage, DB
-from persistent.mapping import PersistentMapping
-from django.conf import settings
 
-_db = None
-_conn = None
-_root = None
 
-def open_db():
-    global _db, _conn, _root
-    if _db is None:
-        os.makedirs(os.path.dirname(settings.ZODB_FILE), exist_ok=True)
-        storage = FileStorage.FileStorage(str(settings.ZODB_FILE))
-        _db = DB(storage)
-        _conn = _db.open()
-        _root = _conn.root()
-        if "indexes" not in _root:
-            _root["indexes"] = PersistentMapping()
-        idx = _root["indexes"]
-        for key in ("homes", "floors", "rooms", "devices"):
-            if key not in idx:
-                idx[key] = PersistentMapping()
-        transaction.commit()
-    return _db, _conn, _root
+_db_instance = None
 
-def root():
-    if _root is None:
-        open_db()
-    return _root
+
+def _get_storage_path() -> str:
+    base_dir = Path(__file__).resolve().parent.parent
+    data_dir = base_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return str(data_dir / "smarthome.fs")
+
+
+def get_db() -> DB:
+    global _db_instance
+    if _db_instance is None:
+        storage = FileStorage(_get_storage_path())
+        _db_instance = DB(storage)
+    return _db_instance
+
+
+@contextmanager
+def get_connection():
+    db = get_db()
+    connection = db.open()
+    try:
+        root = connection.root()
+        # Ensure root containers exist
+        if "homes" not in root:
+            root["homes"] = OOBTree()
+            transaction.commit()
+        yield connection, root
+        # Caller is responsible for committing/aborting
+    finally:
+        connection.close()
+
 
 def commit():
     transaction.commit()
 
-def new_id() -> str:
-    return str(uuid.uuid4())
+
+def abort():
+    transaction.abort()
+
+

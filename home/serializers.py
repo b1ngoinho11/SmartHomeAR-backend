@@ -1,37 +1,75 @@
 from rest_framework import serializers
 
-class HomeCreateSer(serializers.Serializer):
+
+class HomeSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
     name = serializers.CharField()
 
-class FloorCreateSer(serializers.Serializer):
-    level = serializers.IntegerField()
 
-class RoomCreateSer(serializers.Serializer):
+class FloorSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
+    name = serializers.CharField()
+    number = serializers.IntegerField()
+
+
+class RoomSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
     name = serializers.CharField()
 
-class DeviceCreateSer(serializers.Serializer):
+
+class DeviceSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
     name = serializers.CharField()
-    type = serializers.ChoiceField(choices=["lightbulb","television","fan","air_conditioner"])
-    x = serializers.FloatField(required=False, default=0.0)
-    y = serializers.FloatField(required=False, default=0.0)
-    z = serializers.FloatField(required=False, default=0.0)
+    type = serializers.CharField(read_only=True)
+    is_on = serializers.BooleanField(read_only=True)
+    position = serializers.ListField(child=serializers.FloatField(), allow_null=True, required=False)
 
-class PositionSetSer(serializers.Serializer):
-    x = serializers.FloatField()
-    y = serializers.FloatField()
-    z = serializers.FloatField()
 
-class LightbulbPatchSer(serializers.Serializer):
-    brightness = serializers.IntegerField(min_value=0, max_value=100, required=False)
+class LightbulbSerializer(DeviceSerializer):
+    brightness = serializers.IntegerField(required=False)
     colour = serializers.CharField(required=False)
 
-class TelevisionPatchSer(serializers.Serializer):
-    volume = serializers.IntegerField(min_value=0, max_value=100, required=False)
-    channel = serializers.IntegerField(min_value=1, required=False)
 
-class FanPatchSer(serializers.Serializer):
-    speed = serializers.IntegerField(min_value=0, max_value=5, required=False)
+class TelevisionSerializer(DeviceSerializer):
+    volume = serializers.IntegerField(required=False)
+    channel = serializers.IntegerField(required=False)
+
+
+class FanSerializer(DeviceSerializer):
+    speed = serializers.IntegerField(required=False)
     swing = serializers.BooleanField(required=False)
 
-class AirConPatchSer(serializers.Serializer):
-    temperature = serializers.FloatField(required=False)
+
+class AirConditionerSerializer(DeviceSerializer):
+    temperature = serializers.IntegerField(required=False)
+
+
+class SetPositionSerializer(serializers.Serializer):
+    lon = serializers.FloatField()
+    lat = serializers.FloatField()
+    alt = serializers.FloatField(required=False, allow_null=True)
+
+
+class TogglePowerSerializer(serializers.Serializer):
+    on = serializers.BooleanField(required=False)
+
+
+class LightbulbSetSerializer(serializers.Serializer):
+    brightness = serializers.IntegerField(required=False)
+    colour = serializers.CharField(required=False)
+
+
+class TelevisionSetSerializer(serializers.Serializer):
+    volume = serializers.IntegerField(required=False)
+    channel = serializers.IntegerField(required=False)
+
+
+class FanSetSerializer(serializers.Serializer):
+    speed = serializers.IntegerField(required=False)
+    swing = serializers.BooleanField(required=False)
+
+
+class AirConditionerSetSerializer(serializers.Serializer):
+    temperature = serializers.IntegerField(required=False)
+
+

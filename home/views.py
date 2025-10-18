@@ -1,185 +1,416 @@
+from typing import Any, Dict, Tuple
+
 from django.contrib.gis.geos import Point
+from django.http import Http404
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .zodb_store import open_db, commit
-from .zo_models import (
-    Home, Floor, Room,
-    Lightbulb, Television, Fan, AirConditioner,
-    add_home, add_floor, add_room, add_device,
-    get_home, get_floor, get_room, get_device,
-)
-from .serializers import *
 from .models import PositionHistory
+from .serializers import (
+    HomeSerializer,
+    FloorSerializer,
+    RoomSerializer,
+    DeviceSerializer,
+    LightbulbSerializer,
+    TelevisionSerializer,
+    FanSerializer,
+    AirConditionerSerializer,
+    TogglePowerSerializer,
+    SetPositionSerializer,
+    LightbulbSetSerializer,
+    TelevisionSetSerializer,
+    FanSetSerializer,
+    AirConditionerSetSerializer,
+)
+from .zodb_store import get_connection, commit, abort
+from .zo_models import Home, Floor, Room, Device, Lightbulb, Television, Fan, AirConditioner
 
-open_db()  # ensure ZODB ready
 
-# ---------- Home ----------
-class HomeCreate(APIView):
+def _key(value) -> str:
+    return str(value)
+
+
+def _get_home_floor_room(root, home_id, floor_id=None, room_id=None) -> Tuple[Any, Any, Any]:
+    home = root["homes"].get(_key(home_id))
+    if home is None:
+        raise Http404("Home not found")
+    floor = None
+    room = None
+    if floor_id is not None:
+        floor = home.floors.get(_key(floor_id))
+        if floor is None:
+            raise Http404("Floor not found")
+    if room_id is not None and floor is not None:
+        room = floor.rooms.get(_key(room_id))
+        if room is None:
+            raise Http404("Room not found")
+    return home, floor, room
+
+
+class HomeListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        with get_connection() as (conn, root):
+            homes = [h for _, h in root["homes"].items()]
+            data = [{"id": str(h.id), "name": h.name} for h in homes]
+            return Response(data)
+
     def post(self, request):
-        ser = HomeCreateSer(data=request.data)
-        ser.is_valid(raise_exception=True)
-        h = Home(ser.validated_data["name"])
-        add_home(h); commit()
-        return Response({"id": h.id, "name": h.name}, status=201)
+        serializer = HomeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with get_connection() as (conn, root):
+            home = Home(name=serializer.validated_data["name"])
+            root["homes"][str(home.id)] = home
+            commit()
+            return Response({"id": str(home.id), "name": home.name}, status=status.HTTP_201_CREATED)
 
-class HomeDetail(APIView):
+
+class HomeDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, home_id):
-        h = get_home(home_id)
-        if not h:
-            return Response({"detail": "Not found"}, status=404)
-        floors = [get_floor(fid) for fid in list(h.floor_ids)]    # <- cast
-        return Response({
-            "id": h.id,
-            "name": h.name,
-            "floors": [
-                {
-                    "id": f.id,
-                    "level": f.level,
-                    "rooms": [str(rid) for rid in list(f.room_ids)],  # <- cast
-                }
-                for f in floors
-            ],
-        })
+        with get_connection() as (conn, root):
+            home = root["homes"].get(_key(home_id))
+            if not home:
+                raise Http404
+            return Response({"id": str(home.id), "name": home.name})
 
-# ---------- Floor ----------
-class FloorCreate(APIView):
+    def delete(self, request, home_id):
+        with get_connection() as (conn, root):
+            key = _key(home_id)
+            if key in root["homes"]:
+                del root["homes"][key]
+                commit()
+                return Response(status=status.HTTP_204_NO_CONTENT)
+            raise Http404
+
+
+class FloorListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, home_id):
+        with get_connection() as (conn, root):
+            home, _, _ = _get_home_floor_room(root, home_id)
+            floors = [f for _, f in home.floors.items()]
+            data = [{"id": str(f.id), "name": f.name, "number": f.number} for f in floors]
+            return Response(data)
+
     def post(self, request, home_id):
-        ser = FloorCreateSer(data=request.data)
-        ser.is_valid(raise_exception=True)
-        h = get_home(home_id)
-        if not h: return Response({"detail":"Home not found"}, status=404)
-        f = Floor(ser.validated_data["level"])
-        add_floor(f, h.id); commit()
-        return Response({"id": f.id, "level": f.level}, status=201)
+        serializer = FloorSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with get_connection() as (conn, root):
+            home, _, _ = _get_home_floor_room(root, home_id)
+            floor = Floor(name=serializer.validated_data["name"], number=serializer.validated_data["number"])
+            home.floors[str(floor.id)] = floor
+            commit()
+            return Response({"id": str(floor.id), "name": floor.name, "number": floor.number}, status=status.HTTP_201_CREATED)
 
-class FloorRooms(APIView):
-    def get(self, request, floor_id):
-        f = get_floor(floor_id)
-        if not f:
-            return Response({"detail": "Not found"}, status=404)
-        return Response({
-            "id": f.id,
-            "level": f.level,
-            "rooms": [str(rid) for rid in list(f.room_ids)],   # <- cast
-        })
 
-# ---------- Room ----------
-class RoomCreate(APIView):
-    def post(self, request, floor_id):
-        ser = RoomCreateSer(data=request.data)
-        ser.is_valid(raise_exception=True)
-        f = get_floor(floor_id)
-        if not f: return Response({"detail":"Floor not found"}, status=404)
-        r = Room(ser.validated_data["name"])
-        add_room(r, f.id); commit()
-        return Response({"id": r.id, "name": r.name}, status=201)
+class FloorDetailView(APIView):
+    permission_classes = [IsAuthenticated]
 
-class RoomDevices(APIView):
-    def get(self, request, room_id):
-        r = get_room(room_id)
-        if not r:
-            return Response({"detail": "Not found"}, status=404)
-        return Response({
-            "room_id": r.id,
-            "devices": [str(did) for did in list(r.device_ids)],
-        })
+    def get(self, request, home_id, floor_id):
+        with get_connection() as (conn, root):
+            _, floor, _ = _get_home_floor_room(root, home_id, floor_id)
+            return Response({"id": str(floor.id), "name": floor.name, "number": floor.number})
 
-# ---------- Device CRUD-ish ----------
-class DeviceCreate(APIView):
-    def post(self, request, room_id):
-        ser = DeviceCreateSer(data=request.data)
-        ser.is_valid(raise_exception=True)
-        r = get_room(room_id)
-        if not r: return Response({"detail":"Room not found"}, status=404)
+    def delete(self, request, home_id, floor_id):
+        with get_connection() as (conn, root):
+            home, floor, _ = _get_home_floor_room(root, home_id, floor_id)
+            del home.floors[str(floor.id)]
+            commit()
+            return Response(status=status.HTTP_204_NO_CONTENT)
 
-        kwargs = dict(name=ser.validated_data["name"],
-                      x=ser.validated_data["x"], y=ser.validated_data["y"], z=ser.validated_data["z"])
-        t = ser.validated_data["type"]
-        if t == "lightbulb": d = Lightbulb(**kwargs)
-        elif t == "television": d = Television(**kwargs)
-        elif t == "fan": d = Fan(**kwargs)
-        else: d = AirConditioner(**kwargs)
 
-        add_device(d, r.id); commit()
-        return Response({"id": d.id, "type": d.type, "name": d.name}, status=201)
+class RoomListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
 
-class DeviceDetail(APIView):
+    def get(self, request, home_id, floor_id):
+        with get_connection() as (conn, root):
+            _, floor, _ = _get_home_floor_room(root, home_id, floor_id)
+            rooms = [r for _, r in floor.rooms.items()]
+            data = [{"id": str(r.id), "name": r.name} for r in rooms]
+            return Response(data)
+
+    def post(self, request, home_id, floor_id):
+        serializer = RoomSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with get_connection() as (conn, root):
+            _, floor, _ = _get_home_floor_room(root, home_id, floor_id)
+            room = Room(name=serializer.validated_data["name"])
+            floor.rooms[str(room.id)] = room
+            commit()
+            return Response({"id": str(room.id), "name": room.name}, status=status.HTTP_201_CREATED)
+
+
+class RoomDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, home_id, floor_id, room_id):
+        with get_connection() as (conn, root):
+            _, _, room = _get_home_floor_room(root, home_id, floor_id, room_id)
+            return Response({"id": str(room.id), "name": room.name})
+
+    def delete(self, request, home_id, floor_id, room_id):
+        with get_connection() as (conn, root):
+            _, floor, room = _get_home_floor_room(root, home_id, floor_id, room_id)
+            del floor.rooms[str(room.id)]
+            commit()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+def _device_to_dict(device) -> Dict[str, Any]:
+    base = {
+        "id": str(device.id),
+        "name": device.name,
+        "is_on": device.is_on,
+        "position": list(device.position) if device.position else None,
+    }
+    if isinstance(device, Lightbulb):
+        base.update({"type": "lightbulb", "brightness": device.brightness, "colour": device.colour})
+    elif isinstance(device, Television):
+        base.update({"type": "television", "volume": device.volume, "channel": device.channel})
+    elif isinstance(device, Fan):
+        base.update({"type": "fan", "speed": device.speed, "swing": device.swing})
+    elif isinstance(device, AirConditioner):
+        base.update({"type": "air_conditioner", "temperature": device.temperature})
+    else:
+        base.update({"type": "device"})
+    return base
+
+
+class DeviceListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, home_id, floor_id, room_id):
+        with get_connection() as (conn, root):
+            _, _, room = _get_home_floor_room(root, home_id, floor_id, room_id)
+            devices = [d for _, d in room.devices.items()]
+            data = [_device_to_dict(d) for d in devices]
+            return Response(data)
+
+    def post(self, request, home_id, floor_id, room_id):
+        device_type = request.data.get("type")
+        name = request.data.get("name")
+        if not device_type or not name:
+            return Response({"detail": "'type' and 'name' are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        type_map = {
+            "lightbulb": Lightbulb,
+            "television": Television,
+            "fan": Fan,
+            "air_conditioner": AirConditioner,
+        }
+        cls = type_map.get(str(device_type).lower())
+        if not cls:
+            return Response({"detail": "Unknown device type"}, status=status.HTTP_400_BAD_REQUEST)
+
+        with get_connection() as (conn, root):
+            _, _, room = _get_home_floor_room(root, home_id, floor_id, room_id)
+            device = cls(name=name)
+            room.devices[str(device.id)] = device
+            commit()
+            return Response(_device_to_dict(device), status=status.HTTP_201_CREATED)
+
+
+class DeviceDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, home_id, floor_id, room_id, device_id):
+        with get_connection() as (conn, root):
+            _, _, room = _get_home_floor_room(root, home_id, floor_id, room_id)
+            device = room.devices.get(_key(device_id))
+            if not device:
+                raise Http404
+            return Response(_device_to_dict(device))
+
+    def delete(self, request, home_id, floor_id, room_id, device_id):
+        with get_connection() as (conn, root):
+            _, _, room = _get_home_floor_room(root, home_id, floor_id, room_id)
+            key = _key(device_id)
+            if key in room.devices:
+                del room.devices[key]
+                commit()
+                return Response(status=status.HTTP_204_NO_CONTENT)
+            raise Http404
+
+
+class DeviceTogglePowerView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, device_id):
+        serializer = TogglePowerSerializer(data=request.data)
+        serializer.is_valid(raise_exception=False)
+        with get_connection() as (conn, root):
+            # Search device in all rooms (simple scan)
+            for _, home in root["homes"].items():
+                for _, floor in home.floors.items():
+                    for _, room in floor.rooms.items():
+                        device = room.devices.get(_key(device_id))
+                        if device:
+                            device.toggle_power(serializer.validated_data.get("on"))
+                            commit()
+                            return Response(_device_to_dict(device))
+            raise Http404
+
+
+class DevicePositionView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, device_id):
-        d = get_device(device_id)
-        if not d: return Response({"detail":"Not found"}, status=404)
-        base = {"id": d.id, "type": d.type, "name": d.name, "power": d.power, "position": [d.x,d.y,d.z]}
-        if d.type == "lightbulb": base.update({"brightness": d.brightness, "colour": d.colour})
-        if d.type == "television": base.update({"volume": d.volume, "channel": d.channel})
-        if d.type == "fan": base.update({"speed": d.speed, "swing": d.swing})
-        if d.type == "air_conditioner": base.update({"temperature": d.temperature})
-        return Response(base)
+        with get_connection() as (conn, root):
+            for _, home in root["homes"].items():
+                for _, floor in home.floors.items():
+                    for _, room in floor.rooms.items():
+                        device = room.devices.get(_key(device_id))
+                        if device:
+                            return Response({"position": list(device.get_position()) if device.get_position() else None})
+            raise Http404
 
-# ---------- Device actions ----------
-class DeviceTogglePower(APIView):
-    def patch(self, request, device_id):
-        d = get_device(device_id)
-        if not d: return Response({"detail":"Not found"}, status=404)
-        d.toggle_power(); commit()
-        return Response({"id": d.id, "power": d.power})
+    def post(self, request, device_id):
+        serializer = SetPositionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        lon = serializer.validated_data["lon"]
+        lat = serializer.validated_data["lat"]
+        alt = serializer.validated_data.get("alt")
 
-class DeviceSetPosition(APIView):
-    def patch(self, request, device_id):
-        d = get_device(device_id)
-        if not d: return Response({"detail":"Not found"}, status=404)
-        ser = PositionSetSer(data=request.data)
-        ser.is_valid(raise_exception=True)
-        x,y,z = ser.validated_data["x"], ser.validated_data["y"], ser.validated_data["z"]
+        with get_connection() as (conn, root):
+            for _, home in root["homes"].items():
+                for _, floor in home.floors.items():
+                    for _, room in floor.rooms.items():
+                        device = room.devices.get(_key(device_id))
+                        if device:
+                            device.set_position(lon, lat, alt)
+                            commit()
+                            # Record PostGIS point history as 2D to match column
+                            point = Point(lon, lat)
+                            PositionHistory.objects.create(device_id=device.id, point=point)
+                            return Response(_device_to_dict(device))
+            raise Http404
 
-        # update ZODB
-        d.set_position(x,y,z); commit()
 
-        # record PostGIS history (lon=x, lat=y, z=z)
-        PositionHistory.objects.create(
-            device_id=d.id,
-            point=Point(x, y, z)  # SRID 4326 by default
-        )
-        return Response({"id": d.id, "position": [d.x,d.y,d.z]})
+class LightbulbControlView(APIView):
+    permission_classes = [IsAuthenticated]
 
-class DeviceGetPosition(APIView):
     def get(self, request, device_id):
-        d = get_device(device_id)
-        if not d: return Response({"detail":"Not found"}, status=404)
-        trail = PositionHistory.objects.filter(device_id=d.id).order_by("-recorded_at")[:100]
-        history = [{"t": h.recorded_at.isoformat(), "x": h.point.x, "y": h.point.y, "z": h.point.z or 0.0}
-                   for h in trail]
-        return Response({"current": [d.x,d.y,d.z], "history": history})
+        with get_connection() as (conn, root):
+            for _, home in root["homes"].items():
+                for _, floor in home.floors.items():
+                    for _, room in floor.rooms.items():
+                        device = room.devices.get(_key(device_id))
+                        if isinstance(device, Lightbulb):
+                            return Response(_device_to_dict(device))
+            raise Http404
 
-# ---------- Type-specific PATCH ----------
-class LightbulbPatch(APIView):
-    def patch(self, request, device_id):
-        d = get_device(device_id)
-        if not d or d.type != "lightbulb": return Response({"detail":"Not found"}, status=404)
-        ser = LightbulbPatchSer(data=request.data); ser.is_valid(raise_exception=True)
-        for k,v in ser.validated_data.items(): setattr(d, k, v)
-        commit(); return Response({"id": d.id, "brightness": d.brightness, "colour": d.colour})
+    def post(self, request, device_id):
+        serializer = LightbulbSetSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with get_connection() as (conn, root):
+            for _, home in root["homes"].items():
+                for _, floor in home.floors.items():
+                    for _, room in floor.rooms.items():
+                        device = room.devices.get(_key(device_id))
+                        if isinstance(device, Lightbulb):
+                            if "brightness" in serializer.validated_data:
+                                device.set_brightness(serializer.validated_data["brightness"])
+                            if "colour" in serializer.validated_data:
+                                device.set_colour(serializer.validated_data["colour"])
+                            commit()
+                            return Response(_device_to_dict(device))
+            raise Http404
 
-class TelevisionPatch(APIView):
-    def patch(self, request, device_id):
-        d = get_device(device_id)
-        if not d or d.type != "television": return Response({"detail":"Not found"}, status=404)
-        ser = TelevisionPatchSer(data=request.data); ser.is_valid(raise_exception=True)
-        for k,v in ser.validated_data.items(): setattr(d, k, v)
-        commit(); return Response({"id": d.id, "volume": d.volume, "channel": d.channel})
 
-class FanPatch(APIView):
-    def patch(self, request, device_id):
-        d = get_device(device_id)
-        if not d or d.type != "fan": return Response({"detail":"Not found"}, status=404)
-        ser = FanPatchSer(data=request.data); ser.is_valid(raise_exception=True)
-        for k,v in ser.validated_data.items(): setattr(d, k, v)
-        commit(); return Response({"id": d.id, "speed": d.speed, "swing": d.swing})
+class TelevisionControlView(APIView):
+    permission_classes = [IsAuthenticated]
 
-class AirConPatch(APIView):
-    def patch(self, request, device_id):
-        d = get_device(device_id)
-        if not d or d.type != "air_conditioner": return Response({"detail":"Not found"}, status=404)
-        ser = AirConPatchSer(data=request.data); ser.is_valid(raise_exception=True)
-        for k,v in ser.validated_data.items(): setattr(d, k, v)
-        commit(); return Response({"id": d.id, "temperature": d.temperature})
+    def get(self, request, device_id):
+        with get_connection() as (conn, root):
+            for _, home in root["homes"].items():
+                for _, floor in home.floors.items():
+                    for _, room in floor.rooms.items():
+                        device = room.devices.get(_key(device_id))
+                        if isinstance(device, Television):
+                            return Response(_device_to_dict(device))
+            raise Http404
+
+    def post(self, request, device_id):
+        serializer = TelevisionSetSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with get_connection() as (conn, root):
+            for _, home in root["homes"].items():
+                for _, floor in home.floors.items():
+                    for _, room in floor.rooms.items():
+                        device = room.devices.get(_key(device_id))
+                        if isinstance(device, Television):
+                            if "volume" in serializer.validated_data:
+                                device.set_volume(serializer.validated_data["volume"])
+                            if "channel" in serializer.validated_data:
+                                device.set_channel(serializer.validated_data["channel"])
+                            commit()
+                            return Response(_device_to_dict(device))
+            raise Http404
+
+
+class FanControlView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, device_id):
+        with get_connection() as (conn, root):
+            for _, home in root["homes"].items():
+                for _, floor in home.floors.items():
+                    for _, room in floor.rooms.items():
+                        device = room.devices.get(_key(device_id))
+                        if isinstance(device, Fan):
+                            return Response(_device_to_dict(device))
+            raise Http404
+
+    def post(self, request, device_id):
+        serializer = FanSetSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with get_connection() as (conn, root):
+            for _, home in root["homes"].items():
+                for _, floor in home.floors.items():
+                    for _, room in floor.rooms.items():
+                        device = room.devices.get(_key(device_id))
+                        if isinstance(device, Fan):
+                            if "speed" in serializer.validated_data:
+                                device.set_speed(serializer.validated_data["speed"])
+                            if "swing" in serializer.validated_data:
+                                device.set_swing(serializer.validated_data["swing"])
+                            commit()
+                            return Response(_device_to_dict(device))
+            raise Http404
+
+
+class AirConditionerControlView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, device_id):
+        with get_connection() as (conn, root):
+            for _, home in root["homes"].items():
+                for _, floor in home.floors.items():
+                    for _, room in floor.rooms.items():
+                        device = room.devices.get(_key(device_id))
+                        if isinstance(device, AirConditioner):
+                            return Response(_device_to_dict(device))
+            raise Http404
+
+    def post(self, request, device_id):
+        serializer = AirConditionerSetSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with get_connection() as (conn, root):
+            for _, home in root["homes"].items():
+                for _, floor in home.floors.items():
+                    for _, room in floor.rooms.items():
+                        device = room.devices.get(_key(device_id))
+                        if isinstance(device, AirConditioner):
+                            if "temperature" in serializer.validated_data:
+                                device.set_temperature(serializer.validated_data["temperature"])
+                            commit()
+                            return Response(_device_to_dict(device))
+            raise Http404
+
+

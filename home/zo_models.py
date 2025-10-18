@@ -1,111 +1,123 @@
-from abc import ABC, abstractmethod
+import uuid
+from typing import Optional
+
+from BTrees.OOBTree import OOBTree
 from persistent import Persistent
-from persistent.list import PersistentList
-from .zodb_store import new_id, root
 
-class Device(Persistent, ABC):
-    """Abstract base class for all device types stored in ZODB."""
-    def __init__(self, name, x=0.0, y=0.0, z=0.0, power=False):
-        self.id = new_id()
+
+class Device(Persistent):
+    def __init__(self, name: str):
+        self.id = uuid.uuid4()
         self.name = name
-        self.power = bool(power)
-        self.x = float(x)
-        self.y = float(y)
-        self.z = float(z)
-        self.type = self.__class__.__name__.lower()
+        self.is_on = False
+        self.position = None  # (lon, lat, alt) tuple
 
-    def toggle_power(self):
-        self.power = not self.power
+    # power
+    def toggle_power(self, on: Optional[bool] = None):
+        if on is None:
+            self.is_on = not self.is_on
+        else:
+            self.is_on = bool(on)
 
-    def set_position(self, x, y, z):
-        self.x, self.y, self.z = float(x), float(y), float(z)
+    # position: set/get handled in DRF view to also persist PostGIS history
+    def set_position(self, lon: float, lat: float, alt: Optional[float] = None):
+        self.position = (lon, lat, alt)
 
-    @abstractmethod
-    def status(self):
-        """Each concrete device should implement a simple status dict."""
-        pass
+    def get_position(self):
+        return self.position
 
 
 class Lightbulb(Device):
-    def __init__(self, name, **kw):
-        super().__init__(name, **kw)
-        self.brightness = 100
-        self.colour = "white"
+    def __init__(self, name: str):
+        super().__init__(name)
+        self.brightness = 0  # 0-100
+        self.colour = "white"  # simple string for color name/hex
 
-    def status(self):
-        return {"brightness": self.brightness, "colour": self.colour}
+    def set_brightness(self, value: int):
+        value = max(0, min(100, int(value)))
+        self.brightness = value
+
+    def get_brightness(self) -> int:
+        return self.brightness
+
+    def set_colour(self, value: str):
+        self.colour = str(value)
+
+    def get_colour(self) -> str:
+        return self.colour
 
 
 class Television(Device):
-    def __init__(self, name, **kw):
-        super().__init__(name, **kw)
-        self.volume = 10
+    def __init__(self, name: str):
+        super().__init__(name)
+        self.volume = 10  # 0-100
         self.channel = 1
 
-    def status(self):
-        return {"volume": self.volume, "channel": self.channel}
+    def set_volume(self, value: int):
+        value = max(0, min(100, int(value)))
+        self.volume = value
+
+    def get_volume(self) -> int:
+        return self.volume
+
+    def set_channel(self, value: int):
+        self.channel = int(value)
+
+    def get_channel(self) -> int:
+        return self.channel
 
 
 class Fan(Device):
-    def __init__(self, name, **kw):
-        super().__init__(name, **kw)
-        self.speed = 1
+    def __init__(self, name: str):
+        super().__init__(name)
+        self.speed = 0  # 0-5
         self.swing = False
 
-    def status(self):
-        return {"speed": self.speed, "swing": self.swing}
+    def set_speed(self, value: int):
+        value = max(0, min(5, int(value)))
+        self.speed = value
+
+    def get_speed(self) -> int:
+        return self.speed
+
+    def set_swing(self, value: bool):
+        self.swing = bool(value)
+
+    def get_swing(self) -> bool:
+        return self.swing
 
 
 class AirConditioner(Device):
-    def __init__(self, name, **kw):
-        super().__init__(name, **kw)
-        self.temperature = 24.0
+    def __init__(self, name: str):
+        super().__init__(name)
+        self.temperature = 24
 
-    def status(self):
-        return {"temperature": self.temperature}
+    def set_temperature(self, value: int):
+        self.temperature = int(value)
+
+    def get_temperature(self) -> int:
+        return self.temperature
 
 
 class Room(Persistent):
-    def __init__(self, name):
-        self.id = new_id()
+    def __init__(self, name: str):
+        self.id = uuid.uuid4()
         self.name = name
-        self.device_ids = PersistentList()
+        self.devices = OOBTree()  # device_id -> Device
 
 
 class Floor(Persistent):
-    def __init__(self, level: int):
-        self.id = new_id()
-        self.level = int(level)
-        self.room_ids = PersistentList()
+    def __init__(self, name: str, number: int):
+        self.id = uuid.uuid4()
+        self.name = name
+        self.number = number
+        self.rooms = OOBTree()  # room_id -> Room
 
 
 class Home(Persistent):
-    def __init__(self, name):
-        self.id = new_id()
+    def __init__(self, name: str):
+        self.id = uuid.uuid4()
         self.name = name
-        self.floor_ids = PersistentList()
+        self.floors = OOBTree()  # floor_id -> Floor
 
 
-# ------- helpers for indexing / relationships -------
-def idx():
-    return root()["indexes"]
-
-def add_home(h: Home):
-    idx()["homes"][h.id] = h
-
-def add_floor(f: Floor, home_id: str):
-    idx()["floors"][f.id] = f
-    idx()["homes"][home_id].floor_ids.append(f.id)
-
-def add_room(r: Room, floor_id: str):
-    idx()["rooms"][r.id] = r
-    idx()["floors"][floor_id].room_ids.append(r.id)
-
-def add_device(d: Device, room_id: str):
-    idx()["devices"][d.id] = d
-    idx()["rooms"][room_id].device_ids.append(d.id)
-
-def get_home(home_id): return idx()["homes"].get(home_id)
-def get_floor(floor_id): return idx()["floors"].get(floor_id)
-def get_room(room_id): return idx()["rooms"].get(room_id)
-def get_device(device_id): return idx()["devices"].get(device_id)
