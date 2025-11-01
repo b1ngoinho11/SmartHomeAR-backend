@@ -6,7 +6,7 @@ class PositionHistory(models.Model):
     device_id = models.UUIDField(db_index=True)
     recorded_at = models.DateTimeField(auto_now_add=True)
     # 3D point; PostGIS supports Z – store in SRID 4326 by default
-    point = models.PointField(srid=4326)  # you can store (x,y,z); z kept
+    point = models.PointField(dim=3, srid=4326)  # you can store (x,y,z); z kept
 
     class Meta:
         indexes = [models.Index(fields=["device_id", "recorded_at"])]

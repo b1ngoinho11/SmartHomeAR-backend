@@ -285,8 +285,11 @@ class DevicePositionView(APIView):
                         if device:
                             device.set_position(lon, lat, alt)
                             commit()
-                            # Record PostGIS point history as 2D to match column
-                            point = Point(lon, lat)
+                            # Record PostGIS point history with 3D support
+                            if alt is not None:
+                                point = Point(lon, lat, alt, srid=4326)
+                            else:
+                                point = Point(lon, lat, srid=4326)
                             PositionHistory.objects.create(device_id=device.id, point=point)
                             return Response(_device_to_dict(device))
             raise Http404
